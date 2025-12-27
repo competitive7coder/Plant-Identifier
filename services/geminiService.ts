@@ -1,6 +1,4 @@
-// src/services/geminiService.ts
-
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { AnalysisResult, PlantData } from "../types";
 
 const apiKey = import.meta.env.VITE_API_KEY;
@@ -9,12 +7,12 @@ if (!apiKey) {
   throw new Error("VITE_API_KEY is not set");
 }
 
-const genAI = new GoogleGenAI({ apiKey });
+const genAI = new GoogleGenerativeAI(apiKey);
 
 export async function analyzePlantImage(
   imageFile: File
 ): Promise<AnalysisResult> {
-  const model = genAI.models.get({ model: "gemini-1.5-flash" });
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
   const base64Image = await fileToBase64(imageFile);
 
@@ -34,27 +32,29 @@ If it is NOT a plant, respond ONLY with:
 { "error": "Not a plant" }
 `;
 
-  const result = await model.generateContent([
-    { text: prompt },
-    {
-      inlineData: {
-        mimeType: imageFile.type,
-        data: base64Image,
-      },
-    },
-  ]);
-
-  const text = result.text;
-
-  if (!text) {
-    return {
-      isPlant: false,
-      message: "Empty response from AI",
-    };
-  }
-
   try {
-    const parsed = JSON.parse(text);
+    const result = await model.generateContent([
+      prompt,
+      {
+        inlineData: {
+          mimeType: imageFile.type,
+          data: base64Image,
+        },
+      },
+    ]);
+
+    const response = await result.response;
+    const text = response.text();
+
+    if (!text) {
+      return {
+        isPlant: false,
+        message: "Empty response from AI",
+      };
+    }
+
+    const cleanedText = text.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(cleanedText);
 
     if (parsed.error) {
       return {
@@ -67,10 +67,11 @@ If it is NOT a plant, respond ONLY with:
       isPlant: true,
       data: parsed as PlantData,
     };
-  } catch {
+  } catch (error) {
+    console.error("Analysis Error:", error);
     return {
       isPlant: false,
-      message: "Failed to parse AI response",
+      message: error instanceof Error ? error.message : "Failed to analyze image",
     };
   }
 }
