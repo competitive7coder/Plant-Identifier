@@ -1,86 +1,92 @@
-import { GoogleGenAI, Type } from "@google/genai";
-import type { PlantData, AnalysisResult } from "../types";
+// src/services/geminiService.ts
 
-const fileToGenerativePart = async (file: File) => {
-  const base64EncodedDataPromise = new Promise<string>((resolve) => {
+import { GoogleGenAI } from "@google/genai";
+import type { AnalysisResult, PlantData } from "../types";
+
+const apiKey = import.meta.env.VITE_API_KEY;
+
+if (!apiKey) {
+  throw new Error("VITE_API_KEY is not set");
+}
+
+const genAI = new GoogleGenAI({ apiKey });
+
+export async function analyzePlantImage(
+  imageFile: File
+): Promise<AnalysisResult> {
+  const model = genAI.models.get({ model: "gemini-1.5-flash" });
+
+  const base64Image = await fileToBase64(imageFile);
+
+  const prompt = `
+You are a plant identification expert.
+
+If the image is a plant, respond ONLY with valid JSON:
+{
+  "commonName": "",
+  "scientificName": "",
+  "description": "",
+  "benefits": [],
+  "habitat": ""
+}
+
+If it is NOT a plant, respond ONLY with:
+{ "error": "Not a plant" }
+`;
+
+  const result = await model.generateContent([
+    { text: prompt },
+    {
+      inlineData: {
+        mimeType: imageFile.type,
+        data: base64Image,
+      },
+    },
+  ]);
+
+  const text = result.text;
+
+  if (!text) {
+    return {
+      isPlant: false,
+      message: "Empty response from AI",
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(text);
+
+    if (parsed.error) {
+      return {
+        isPlant: false,
+        message: "The image does not appear to be a plant",
+      };
+    }
+
+    return {
+      isPlant: true,
+      data: parsed as PlantData,
+    };
+  } catch {
+    return {
+      isPlant: false,
+      message: "Failed to parse AI response",
+    };
+  }
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result === "string") {
+        resolve(result.split(",")[1]);
+      } else {
+        reject(new Error("Failed to read file"));
+      }
+    };
+    reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
-  return {
-    inlineData: { data: await base64EncodedDataPromise, mimeType: file.type },
-  };
-};
-
-export const analyzePlantImage = async (imageFile: File): Promise<AnalysisResult> => {
-    const modelName = 'gemini-flash-latest';
-
-    // FIX: API key must be retrieved from process.env.API_KEY per guidelines.
-    if (!process.env.API_KEY) {
-        throw new Error("API_KEY environment variable is not set. Please ensure it is configured.");
-    }
-    
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-    const prompt = `You are an expert botanist. Identify the plant in this image. Provide its details. If the image is not a plant or is unclear, set the isPlant property to false and provide placeholder text.`;
-    
-    const responseSchema = {
-        type: Type.OBJECT,
-        properties: {
-            commonName: { type: Type.STRING, description: "Common name of the plant." },
-            scientificName: { type: Type.STRING, description: "Scientific name of the plant." },
-            description: { type: Type.STRING, description: "A brief paragraph about the plant's characteristics." },
-            benefits: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of key benefits or common uses." },
-            habitat: { type: Type.STRING, description: "Where this plant is typically found." },
-            isPlant: { type: Type.BOOLEAN, description: "True if the image contains a plant, false otherwise." },
-        },
-        required: ["commonName", "scientificName", "description", "benefits", "habitat", "isPlant"]
-    };
-
-    try {
-        const imagePart = await fileToGenerativePart(imageFile);
-        const textPart = { text: prompt };
-
-        const response = await ai.models.generateContent({
-            model: modelName,
-            contents: { parts: [imagePart, textPart] },
-            config: {
-                responseMimeType: "application/json",
-                responseSchema,
-            }
-        });
-
-        const jsonText = response.text.trim();
-        const data = JSON.parse(jsonText);
-
-        if (!data.isPlant) {
-            return {
-                isPlant: false,
-                message: "The uploaded image does not appear to be a plant or could not be clearly identified. Please try a different photo."
-            };
-        }
-
-        const plantData: PlantData = {
-            commonName: data.commonName,
-            scientificName: data.scientificName,
-            description: data.description,
-            benefits: data.benefits,
-            habitat: data.habitat,
-        };
-
-        return {
-            isPlant: true,
-            data: plantData
-        };
-
-    } catch (error) {
-        console.error("Error analyzing image with Gemini:", error);
-        if (error instanceof SyntaxError) {
-             throw new Error(`Failed to parse the response from the AI. It might be an issue with the image. Please try another one.`);
-        }
-        if (error instanceof Error) {
-            throw new Error(`${error.message}`);
-        }
-        throw new Error("An unknown error occurred while analyzing the image.");
-    }
-};
+}
