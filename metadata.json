@@ -1,0 +1,5 @@
+{
+  "name": "PlantAI",
+  "description": "Upload a photo of a plant to get its name, benefits, and care information using the Gemini AI model.",
+  "requestFramePermissions": []
+}
